@@ -1,4 +1,5 @@
-#include "http_conn.h"
+#include "Log.h"
+#include "HttpConn.h"
 
 //定义HTTP相应的一些状态信息
 const char* ok_200_title = "ok";
@@ -13,39 +14,6 @@ const char* error_500_form = "there was an unuaual problem serving the request f
 //网站的根目录
 const char* doc_root = "/home/ubuntu/OWL";
 
-int setnonblocking(int fd)
-{
-	int old_option = fcntl(fd, F_GETFL);
-	int new_option = old_option | O_NONBLOCK;
-	fcntl(fd, F_SETFL, new_option);
-	return old_option;
-}
-
-void addfd(int epollfd, int fd, bool enable)
-{
-	epoll_event event;
-	event.data.fd = fd;
-	event.events = EPOLLIN | EPOLLET | EPOLLRDHUP;
-	if (enable)
-		event.events |= EPOLLONESHOT;
-	epoll_ctl(epollfd, EPOLL_CTL_ADD, fd, &event);
-	setnonblocking(fd);
-}
-
-void removefd(int epollfd, int fd)
-{
-	epoll_ctl(epollfd, EPOLL_CTL_DEL, fd, 0);
-	close(fd);
-}
-
-void modfd(int epollfd, int fd, int ev)
-{
-	epoll_event event;
-	event.data.fd = fd;
-	event.events = ev | EPOLLET | EPOLLONESHOT | EPOLLRDHUP;
-
-	epoll_ctl(epollfd, EPOLL_CTL_MOD, fd, &event);
-}
 
 int http_conn::m_user_count = 0;
 int http_conn::m_epollfd = -1;
@@ -54,7 +22,7 @@ void http_conn::close_conn(bool real_close)
 {
 	if (real_close && (m_sockfd != -1))
 	{
-		removefd(m_epollfd, m_sockfd);
+		delfd(m_epollfd, m_sockfd);
 		m_sockfd = -1;
 		m_user_count--; //关闭一个连接时,将客户总量减一
 	}
@@ -66,11 +34,10 @@ void http_conn::init(int sockfd, const sockaddr_in &addr)
 	m_address = addr;
 	m_user_count++;
 
-	//以下部分为了避免TIME_WAIT状态,仅为了调试,实际使用中应该去掉
+	//以下部分为了避免TIME_WAIT状态
 	int reuse = 1;
 	setsockopt(m_sockfd, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse));
 	addfd(m_epollfd, sockfd, true);
-	//
 
 	init();
 }
@@ -151,9 +118,7 @@ bool http_conn::read()
 			return false;
 		m_read_index += bytes_read;
 	}
-cout << "read读取数据:\n" 
-	 << (m_read_buf + m_start_line)
-	 << "----" << endl;
+	INFO("read读取数据:\n%s---\n", m_read_buf + m_start_line);
 	return true;
 }
 
@@ -162,23 +127,17 @@ http_conn::HTTP_CODE http_conn::parse_request_line(char* text)
 {
 	char method[8];
 	sscanf(text, "%s %s %s", method, m_url, m_version);
-
-cout << "开始解析请求行mothod--url--version =="
-	 << method 
-	 << "-" << m_url 
-	 << "-" << m_version << endl;
+	// INFO("开始解析请求行mothod--url--version ==%s--%s--%s\n", method, m_url, m_version);
 
 	if (!strcasecmp(method, "GET"))
 		m_method = GET;
 	else
 	{
-cout << "bad 1" << endl;
 		return BAD_REQUEST;
 	}
 
 	if (m_url[0] != '/')	
 	{
-cout << "bad 2" << endl;
 		return BAD_REQUEST;
 	}
 	else if (strlen(m_url) == 1) 
@@ -188,7 +147,6 @@ cout << "bad 2" << endl;
 
 	if (strcasecmp(m_version, "HTTP/1.1") != 0) 
 	{
-cout << "bad 3" << endl;
 		return BAD_REQUEST;
 	}
 	
@@ -200,17 +158,13 @@ cout << "bad 3" << endl;
 //解析HTTP请求的一个头部信息
 http_conn::HTTP_CODE http_conn::parse_headers(char* text)
 {
-cout << "开始解析请求头:\n" 
-	 << text 
-	 << endl;
+	// INFO("开始解析请求头:\n%s\n", text);
 	//遇到空行,表示头部字段解析完毕
 	if (text[0] == '\0')
 	{
-cout << "if 0" << endl;
 		//如果HTTP请求有消息体,则还需要读取m_content_length字节的消息体,状态机转移到CHECK_STATE_CONTENT状态
 		if (m_content_length != 0)
 		{
-cout << "if 1" << endl;			
 			m_check_state = CHECK_STATE_CONTENT;
 			return NO_REQUEST;
 		}
@@ -220,20 +174,17 @@ cout << "if 1" << endl;
 	//处理Connection头部字段
 	else if (strncasecmp(text, "Connection:", 11) == 0)
 	{
-cout << "if 2" << endl;
 		text += 11;
 		text += strspn(text, " ");
 	
 		if (strcasecmp(text, "keep-alive") == 0) 
 		{	
-cout << "if 3" << endl;
 			m_linger = true;
 		}
 	}
 	//处理Content-Length头部字段
 	else if (strncasecmp(text, "Content-Length:", 15) == 0) 
 	{
-cout << "if 4" << endl;
 		text += 15;
 		text += strspn(text, " ");
 		m_content_length = atol(text);
@@ -241,23 +192,24 @@ cout << "if 4" << endl;
 	//处理HOST头部字段
 	else if (strncasecmp(text, "Host:", 5) == 0)
 	{
-cout << "if 5" << endl;
 		text += 5;
 		text += strspn(text, " ");
 		m_host = text;
 	}
 	else
-		cout << "oop unknow host:" << text << endl;
+	{}
+		// WARN("oop unknow host:%s\n", text);
+
 	return NO_REQUEST;
 }
 
 //我们没有真正解析HTTP请求的消息体,只是判断他是否被完整的读入了
 http_conn::HTTP_CODE http_conn::parse_content(char* text)
 {
-cout << "解析请求体" <<endl;
+	// INFO("解析请求体");
 	if (m_read_index >= (m_check_index + m_content_length))
 	{
-cout << "请求体读取完整了" << endl;
+		// INFO("请求体读取完整了");
 		text[m_content_length] = '\0';
 		return GET_REQUEST;
 	}
@@ -320,12 +272,11 @@ http_conn::HTTP_CODE http_conn::process_read()
 //且不是目录,则使用mmap将其映射到内存地址m_file_address处,并告诉调用者获取文件成功
 http_conn::HTTP_CODE http_conn::do_request()
 {
-cout <<"do_request()" << endl;
 	strcpy(m_real_file, doc_root);
 	int len = strlen(doc_root);
 	// strncpy(m_real_file, m_url, MAXFILENAME_LEN - len - 1);
 	strcat(m_real_file, m_url);
-cout << "m_real_file == " << m_real_file << endl;
+	// INFO("m_real_file == %s\n", m_real_file);
 
 	if (stat(m_real_file, &m_file_stat) < 0)
 		return NO_RESOURCE;
@@ -360,7 +311,7 @@ bool http_conn::write()
 	int bytes_to_send = m_write_index;
 	if (bytes_to_send == 0)
 	{
-		modfd(m_epollfd, m_sockfd, EPOLLIN);
+		ctlfd(m_epollfd, m_sockfd, EPOLLIN);
 		init();
 		return true;
 	}
@@ -374,7 +325,7 @@ bool http_conn::write()
 			//服务器无法立即接受到同一客户的下一个请求,但这可以保证连接的完整性
 			if (errno == EAGAIN)
 			{
-				modfd(m_epollfd, m_sockfd, EPOLLOUT);
+				ctlfd(m_epollfd, m_sockfd, EPOLLOUT);
 				return true;
 			}
 			unmap();
@@ -390,12 +341,12 @@ bool http_conn::write()
 			if (m_linger)
 			{
 				init();
-				modfd(m_epollfd, m_sockfd, EPOLLIN);
+				ctlfd(m_epollfd, m_sockfd, EPOLLIN);
 				return true;
 			}
 			else
 			{
-				modfd(m_epollfd, m_sockfd, EPOLLIN);
+				ctlfd(m_epollfd, m_sockfd, EPOLLIN);
 				return false;
 			}
 		}
@@ -525,11 +476,11 @@ void http_conn::process()
 	if (read_ret == NO_REQUEST)
 	{
 		//什么都没有请求/还有请求体需要读取,重新添加到epoll读事件
-		modfd(m_epollfd, m_sockfd, EPOLLIN);
+		ctlfd(m_epollfd, m_sockfd, EPOLLIN);
 		return;
 	}
 	bool write_ret = process_write(read_ret);
 	if (!(write_ret))
 		close_conn();
-	modfd(m_epollfd, m_sockfd, EPOLLOUT);
+	ctlfd(m_epollfd, m_sockfd, EPOLLOUT);
 }

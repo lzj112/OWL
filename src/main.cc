@@ -1,16 +1,18 @@
 #include <signal.h>
 
 #include <sys/epoll.h>
+#include <sys/socket.h>
 
-#include "locker.h"
-#include "http_conn.h"
-#include "threadpool.h"
+#include "Log.h"
+#include "Locker.h"
+#include "Socket.h"
+#include "HttpConn.h"
+#include "ThreadPool.h"
 
 #define MAX_FD 65536
 #define MAX_EVENT_NUMBER 10000
 
-extern int addfd(int epollfd, int fd, bool one_shot);
-extern int removefd(int epollfd, int fd);
+int port = 8080;
 
 void addsig(int sig, void(handler)(int), bool restart = true)
 {
@@ -27,20 +29,16 @@ void addsig(int sig, void(handler)(int), bool restart = true)
 
 void show_error(int connfd, const char *text)
 {
-	cout << text << endl;
+	ERROR("%s\n", text);
 	send(connfd, text, strlen(text), 0);
 	close(connfd);
 }
 
 int main(int argc, char* arhv[])
 {
-	//if(argc<=2)
-	//	 cout<<"usage: "<<argv[0]<<" ip address port_number";
-	// const char *ip = "127.0.0.1";
-	int port = 3000;
 
 	//忽略SIGPIPE的信号
-	// addsig(SIGPIPE, SIG_IGN);
+	addsig(SIGPIPE, SIG_IGN);
 
 	//创建线程池
 	threadpool<http_conn> *pool = NULL;
@@ -52,32 +50,16 @@ int main(int argc, char* arhv[])
 	{
 		return 1;
 	}
-
 	//预先为每个可能的客户连接分配一个http_conn对象
 	http_conn *user = new http_conn[MAX_FD];
 	assert(user);
 	int user_count = 0;
 
-	int listenfd = socket(PF_INET, SOCK_STREAM, 0);
-	assert(listenfd >= 0);
-	struct linger tmp = {1, 0};
-	setsockopt(listenfd, SOL_SOCKET, SO_LINGER, &tmp, sizeof(tmp));
-
-	int ret = 0;
-	struct sockaddr_in ser;
-	bzero(&ser, sizeof(ser));
-	ser.sin_family = AF_INET;
-	ser.sin_addr.s_addr = htonl(INADDR_ANY); 
-	// inet_pton(AF_INET, ip, &ser.sin_addr);
-	ser.sin_port = htons(port);
-
-	ret = bind(listenfd, (struct sockaddr *)&ser, sizeof(ser));
-	assert(ret >= 0);
-
-	ret = listen(listenfd, 5);
-	assert(ret >= 0);
-
-	epoll_event events[MAX_EVENT_NUMBER];
+	int listenfd = SocketTCP();
+	Bind(listenfd, port);
+	Listen(listenfd, 5);
+	
+	std::vector<epoll_event> events(MAX_EVENT_NUMBER);
 	int epollfd = epoll_create(5);
 	assert(epollfd != -1);
 	addfd(epollfd, listenfd, false);
@@ -85,10 +67,10 @@ int main(int argc, char* arhv[])
 
 	while (true)
 	{
-		int num = epoll_wait(epollfd, events, MAX_EVENT_NUMBER, -1);
+		int num = Wait(epollfd, events, -1);
 		if (num < 0 && errno != EINTR)
 		{
-			cout << "epoll_wait fail" << endl;
+			WARN("epoll_wait fail\n");
 			break;
 		}
 		for (int i = 0; i < num; i++)
@@ -97,46 +79,43 @@ int main(int argc, char* arhv[])
 			if (sockfd == listenfd)
 			{
 				struct sockaddr_in cli;
-				socklen_t len = sizeof(cli);
-				int connfd = accept(listenfd, (struct sockaddr *)&cli, &len);
-				if (connfd < 0)
-				{
-					cout << "connect failed" << endl;
-					continue;
-				}
+				int connfd = Accept(listenfd, cli);
 				if (http_conn::m_user_count >= MAX_FD)
 				{
 					show_error(connfd, "internet busy");
 					continue;
 				}
-cout << "new connection" << endl;
-				//初始化客户连接,添加到用户数组
-				user[connfd].init(connfd, cli);
+				if (connfd > 0)
+				{
+					// INFO("new connection\n");
+					//初始化客户连接,添加到用户数组
+					user[connfd].init(connfd, cli);
+				}
 			}
-			else if (events[i].events & (EPOLLRDHUP | EPOLLHUP | EPOLLERR))
+			else if (events[i].events & (pollRDHangUp | pollHangUp | pollErr))
 			{
-cout << "异常关闭" << endl;
+				WARN("异常关闭\n");
 				//如果有异常,直接关闭客户连接
 				user[sockfd].close_conn();
 			}
 			else if (events[i].events & EPOLLIN)
 			{
-cout << "epoll开始读事件" << endl;
+				// INFO("epoll开始读事件\n");
 				//根据读的结果,决定是否将任务添加到线程池,还是关闭连接
 				if (user[sockfd].read())
 				{
-cout << "添加进任务队列" << endl;
+					// INFO("添加进任务队列\n");
 					pool->append(user + sockfd);//sockfd同时是下标,这里就是计算sockfd个偏移
 				}
 				else
 				{
-cout << "读---关闭" << endl;
+					// INFO("根据read()返回结果关闭连接\n");
 					user[sockfd].close_conn();
 				}
 			}
 			else if (events[i].events & EPOLLOUT)
 			{
-cout << "epoll开始写事件" << endl;
+				// INFO("epoll开始写事件\n");
 				//根据写的结果,决定是否关闭连接
 				if (!user[sockfd].write())
 					user[sockfd].close_conn();
@@ -151,3 +130,4 @@ cout << "epoll开始写事件" << endl;
 	delete[] pool;
 	return 0;
 }
+
