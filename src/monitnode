@@ -1,0 +1,52 @@
+#! /usr/bin/python3
+# -*- coding : utf-8 -*-
+'''
+监控节点
+定时发送本节点监控日志到master_node
+'''
+import sys
+import socket
+import getpass
+import os.path
+from ftplib import FTP
+
+
+def get_host_ip():
+    '''
+    获取本机IP
+    '''
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(('8.8.8.8', 80))
+        ip = s.getsockname()[0]
+    finally:
+        s.close()
+    return ip
+
+# MATSER_IP = '175.24.40.189'
+MATSER_IP = '172.17.0.8'
+MASTER_PORT = 6000
+TIMEOUT = 30
+username = 'lzj'
+passwd = 'zijianlv'
+
+IP = get_host_ip()
+
+#得到文件夹下所有文件名称
+source_dir = '/home/ubuntu/OWL/log' 
+localfile = os.listdir(source_dir)
+remotepath = '/%s' % IP       
+
+f = FTP()
+f.connect(MATSER_IP, MASTER_PORT, TIMEOUT)  #连接ftp服务器
+f.login(username, passwd)     #登录ftp服务器
+f.cwd(remotepath)              #设置ftp服务器端的路径
+
+for filename in localfile:
+    filename = source_dir + "/" + filename
+    print(filename)
+    file = open(filename,'rb')    #打开本地文件
+    f.storbinary('STOR %s' % os.path.basename(filename),file)  #上传文件到ftp服务器
+
+file.close()   #关闭本地文件
+f.quit()       #退出

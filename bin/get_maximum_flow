@@ -1,0 +1,40 @@
+#! /usr/bin/python3
+# -*- coding : utf-8 -*-
+'''
+获取服务器当日最大上传和下载速率
+'''
+import os
+import sys
+import json
+import string
+import socket
+import urllib.parse
+
+sockfd = int(sys.argv[1])
+argv = sys.argv[2]
+argv = "?" + argv
+content = sys.argv[3]
+
+result = urllib.parse.urlsplit(argv)
+parameter = dict(urllib.parse.parse_qsl(urllib.parse.urlsplit(argv).query))
+ip = parameter['ip']
+date = parameter['date']
+
+fname = '/home/ubuntu/monit_log/%s/statistical_%s.log' % (ip, date)
+with open(fname, 'r', encoding='utf-8') as f:  # 打开文件
+    lines = f.readlines() 
+
+log_1 = lines[-2].split()
+max_transport = log_1[2]
+log_2 = lines[-1].split()
+max_receive = log_2[2]
+
+header = "HTTP/1.0 200 OK\r\nContent-type: application/json\r\nContent-Length: "
+body = {}
+body['max_transport'] = max_transport 
+body['max_receive'] = max_receive
+body = json.dumps(body)
+response = '%s%s\r\n\r\n%s' % (header, len(body), body)
+s = socket.fromfd(sockfd, socket.AF_INET, socket.SOCK_STREAM)
+s.sendall(response.encode())
+s.close()

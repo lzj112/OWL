@@ -1,22 +1,10 @@
 #include "Log.h"
 #include "HttpConn.h"
-
-//定义HTTP相应的一些状态信息
-const char* ok_200_title = "ok";
-const char* error_400_title = "Bad Request";
-const char* error_400_form = "Your request has syntax or is inherently impossible to satisfy.\n";
-const char* error_403_title = "Forbidden";
-const char* error_403_form = "you do not have permission to get file from this server.\n";
-const char* error_404_title = "not found";
-const char* error_404_form = "the requested file was not found on this server.\n";
-const char* error_500_title = "internal error";
-const char* error_500_form = "there was an unuaual problem serving the request file.\n";
-//网站的根目录
-const char* doc_root = "/home/ubuntu/OWL";
-
+#include "HttpState.h"
 
 int http_conn::m_user_count = 0;
 int http_conn::m_epollfd = -1;
+
 
 void http_conn::close_conn(bool real_close)
 {
@@ -57,7 +45,9 @@ void http_conn::init()
 	memset(m_write_buf, '\0', WRITE_BUF_SIZE);
 	memset(m_real_file, '\0', MAXFILENAME_LEN);
 	memset(m_url, '\0', sizeof(m_url));
+	memset(m_argv, '\0', sizeof(m_argv));
 	memset(m_version, '\0', sizeof(m_version));
+	memset(m_content, '\0', sizeof(m_content));
 }
 
 //从状态机,每次调用返回HTTP一行内容
@@ -83,21 +73,25 @@ http_conn::LINE_STATUS http_conn::parse_line()
 		}
 		else if (temp == '\n')
 		{
-			//如果开头是\r\n
+			//如果开头是\n
 			if (m_check_index > 1 && (m_read_buf[m_check_index - 1] == '\r'))
 			{
 				m_read_buf[m_check_index - 1] == '\0';
 				m_read_buf[m_check_index++] = '\0';
 				return LINE_OK;
 			}
-			//如果开头是\n
+			//\n上一个不是\r
 			return LINE_BAD;
 		}
 	}
-	return LINE_OPEN;
+	if (m_method == GET)
+		return LINE_OPEN;
+	else if (m_method == POST)
+		return LINE_OK;
 }
 
 //循环读取客户数据,直到无数据可读或者对方关闭连接
+//或者缓冲区已满,这时断开连接等待重连
 bool http_conn::read()
 {
 	//读缓冲区已满
@@ -118,7 +112,7 @@ bool http_conn::read()
 			return false;
 		m_read_index += bytes_read;
 	}
-	INFO("read读取数据:\n%s---\n", m_read_buf + m_start_line);
+	// INFO("read读取数据:\n%s---\n", m_read_buf + m_start_line);
 	return true;
 }
 
@@ -127,22 +121,32 @@ http_conn::HTTP_CODE http_conn::parse_request_line(char* text)
 {
 	char method[8];
 	sscanf(text, "%s %s %s", method, m_url, m_version);
-	// INFO("开始解析请求行mothod--url--version ==%s--%s--%s\n", method, m_url, m_version);
+
+	INFO("开始解析请求行mothod--url--version ==%s--%s--%s\n", method, m_url, m_version);
+	
+	std::string t_url(m_url);
+	std::string::size_type pos = t_url.find('?');
+	if (pos != std::string::npos) 
+	{
+		std::string t_urlsub = t_url.substr(0, pos);
+		std::string t_argv = t_url.substr(pos + 1);
+		memset(m_url, '\0', sizeof(m_url));
+		strcpy(m_url, t_urlsub.c_str());
+		strcpy(m_argv, t_argv.c_str());
+	}
+	else 
+		strcpy(m_argv, "None");		
 
 	if (!strcasecmp(method, "GET"))
 		m_method = GET;
-	else
-	{
+	else if (!strcasecmp(method, "POST"))
+		m_method = POST;
+	else 
 		return BAD_REQUEST;
-	}
 
 	if (m_url[0] != '/')	
 	{
 		return BAD_REQUEST;
-	}
-	else if (strlen(m_url) == 1) 
-	{
-		strcpy(m_url, "/index.html");
 	}
 
 	if (strcasecmp(m_version, "HTTP/1.1") != 0) 
@@ -162,7 +166,8 @@ http_conn::HTTP_CODE http_conn::parse_headers(char* text)
 	//遇到空行,表示头部字段解析完毕
 	if (text[0] == '\0')
 	{
-		//如果HTTP请求有消息体,则还需要读取m_content_length字节的消息体,状态机转移到CHECK_STATE_CONTENT状态
+		//如果HTTP请求有消息体,则还需要读取m_content_length字节的消息体
+		//状态机转移到CHECK_STATE_CONTENT状态
 		if (m_content_length != 0)
 		{
 			m_check_state = CHECK_STATE_CONTENT;
@@ -198,19 +203,19 @@ http_conn::HTTP_CODE http_conn::parse_headers(char* text)
 	}
 	else
 	{}
-		// WARN("oop unknow host:%s\n", text);
 
 	return NO_REQUEST;
 }
 
+
 //我们没有真正解析HTTP请求的消息体,只是判断他是否被完整的读入了
 http_conn::HTTP_CODE http_conn::parse_content(char* text)
 {
-	// INFO("解析请求体");
 	if (m_read_index >= (m_check_index + m_content_length))
 	{
-		// INFO("请求体读取完整了");
+		INFO("需要读取请求体并且请求体读取完整了");
 		text[m_content_length] = '\0';
+		strcat(m_content, text);	//FIXME这里可能有问题
 		return GET_REQUEST;
 	}
 	return NO_REQUEST;
@@ -225,15 +230,15 @@ http_conn::HTTP_CODE http_conn::process_read()
 	char* text = 0;
 	//调用从状态机(parse_line)
 	//从状态机解析OK或者(要解析请求内容且解析状态OK)
-	while ((((m_check_state == CHECK_STATE_CONTENT) && 
-			 (line_status == LINE_OK)) || 
-			 ((line_status = parse_line()) == LINE_OK)))
+	while (( ((m_check_state == CHECK_STATE_CONTENT) && (line_status == LINE_OK)) || 
+			 ((line_status = parse_line()) == LINE_OK) ))
 	{
 		//text每次指向一行数据，\r\n已经替换为\0\0，即指向一个字符串
 		text = get_line();
 		//m_check_index在从状态机已经更新到缓冲区数据尾下一个字节
 		m_start_line = m_check_index;
 
+		//每次解析完一行break，从读缓冲区拿下一行
 		switch (m_check_state)
 		{
 			case CHECK_STATE_REQUESTLINE:
@@ -241,14 +246,14 @@ http_conn::HTTP_CODE http_conn::process_read()
 				ret = parse_request_line(text);
 				if (ret == BAD_REQUEST)
 					return BAD_REQUEST;
-				break;
+				break;		
 			}
 			case CHECK_STATE_HEADER:
 			{
 				ret = parse_headers(text);
 				if (ret == BAD_REQUEST)
 					return BAD_REQUEST;
-				else if (ret == GET_REQUEST)
+				else if (ret == GET_REQUEST)	//无请求体，直接执行do_request
 					return do_request();
 				break;
 			}
@@ -268,16 +273,12 @@ http_conn::HTTP_CODE http_conn::process_read()
 	return NO_REQUEST;
 }
 
-//当得到一个完整的,正确HTPP请求时,我们就分析目标文件的属性,如果目标文件存在,对所有用户可读
-//且不是目录,则使用mmap将其映射到内存地址m_file_address处,并告诉调用者获取文件成功
+//分析目标文件的属性
 http_conn::HTTP_CODE http_conn::do_request()
 {
 	strcpy(m_real_file, doc_root);
-	int len = strlen(doc_root);
-	// strncpy(m_real_file, m_url, MAXFILENAME_LEN - len - 1);
 	strcat(m_real_file, m_url);
-	// INFO("m_real_file == %s\n", m_real_file);
-
+	INFO("m_real_file=%s in do_request", m_real_file);
 	if (stat(m_real_file, &m_file_stat) < 0)
 		return NO_RESOURCE;
 
@@ -287,9 +288,11 @@ http_conn::HTTP_CODE http_conn::do_request()
 	if (S_ISDIR(m_file_stat.st_mode))
 		return BAD_REQUEST;
 
+	/*
 	int fd = open(m_real_file, O_RDONLY);
 	m_file_address = (char* )mmap(0, m_file_stat.st_size, PROT_READ, MAP_PRIVATE, fd, 0);
 	close(fd);
+	*/
 	return FILE_REQUEST;
 }
 
@@ -440,6 +443,29 @@ bool http_conn::process_write(HTTP_CODE ret)
 		}
 		case FILE_REQUEST:
 		{
+			if (m_content_length == 0) 
+				strcpy(m_content, "None");
+			int len = strlen(m_real_file) + strlen(m_argv) + strlen(m_content);
+			std::string c_sockfd = std::to_string(m_sockfd);
+			char* t_argv[] = {
+				"",
+				const_cast<char *> (c_sockfd.c_str()), 
+				m_argv, 
+				m_content, 
+				NULL
+			};
+			INFO("sockfd=%s argv=%s data=%s", t_argv[1], t_argv[2], t_argv[3]);
+			if (fork() == 0)
+				execve(m_real_file, t_argv, NULL);
+			else 
+			{
+				//FIXME 正式使用不等待以提高效率
+				int status;
+				if (::wait(&status) < 0)
+					perror("Wait error");
+			}
+			break;
+			/*
 			add_status(200, ok_200_title);
 			if (m_file_stat.st_size != 0)
 			{
@@ -458,6 +484,7 @@ bool http_conn::process_write(HTTP_CODE ret)
 				if (!add_content(okstring))
 					return false;
 			}
+			*/
 		}
 		default:
 			return false;
@@ -468,7 +495,6 @@ bool http_conn::process_write(HTTP_CODE ret)
 	return true;
 }
 
-//由线程池中的工作线程调用,这是处理HTPP请求的入口函数
 void http_conn::process()
 {
 	//解析HTTP请求
@@ -479,6 +505,7 @@ void http_conn::process()
 		ctlfd(m_epollfd, m_sockfd, EPOLLIN);
 		return;
 	}
+	
 	bool write_ret = process_write(read_ret);
 	if (!(write_ret))
 		close_conn();

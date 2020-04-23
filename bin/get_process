@@ -1,0 +1,52 @@
+#! /usr/bin/python3
+# -*- coding : utf-8 -*-
+'''
+获取当前重要进程运行情况 
+'''
+import os
+import sys
+import json
+import string
+import socket
+import urllib.parse
+
+sockfd = int(sys.argv[1])
+argv = sys.argv[2]
+argv = "?" + argv
+content = sys.argv[3]
+
+result = urllib.parse.urlsplit(argv)
+parameter = dict(urllib.parse.parse_qsl(urllib.parse.urlsplit(argv).query))
+ip = parameter['ip']
+date = parameter['date']
+
+header = "HTTP/1.0 200 OK\r\nContent-type: application/json\r\nContent-Length: "
+fname = '/home/ubuntu/monit_log/%s/process_%s.log' % (ip, date)
+
+with open(fname, 'r', encoding='utf-8') as f:  # 打开文件
+    lines = f.readlines()
+mysql_line = lines[-3].split()
+sshd_line = lines[-2].split()
+nginx_line = lines[-1].split()
+
+body = {}
+if mysql_line[2] == 'running':
+    body['mysql'] = 'true'
+else:
+    body['mysql'] = 'false'
+
+if sshd_line[2] == 'running':
+    body['sshd'] = 'true'
+else:
+    body['sshd'] = 'false'
+
+if nginx_line[2] == 'running':
+    body['nginx'] = 'true'
+else:
+    body['nginx'] = 'false'
+body = json.dumps(body)
+
+response = '%s%s\r\n\r\n%s' % (header, len(body), body)
+s = socket.fromfd(sockfd, socket.AF_INET, socket.SOCK_STREAM)
+s.sendall(response.encode())
+s.close()

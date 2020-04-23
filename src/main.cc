@@ -12,7 +12,7 @@
 #define MAX_FD 65536
 #define MAX_EVENT_NUMBER 10000
 
-int port = 8080;
+int port = 8000;
 
 void addsig(int sig, void(handler)(int), bool restart = true)
 {
@@ -94,7 +94,7 @@ int main(int argc, char* arhv[])
 			}
 			else if (events[i].events & (pollRDHangUp | pollHangUp | pollErr))
 			{
-				WARN("异常关闭\n");
+				// WARN("异常关闭\n");
 				//如果有异常,直接关闭客户连接
 				user[sockfd].close_conn();
 			}
@@ -102,6 +102,7 @@ int main(int argc, char* arhv[])
 			{
 				// INFO("epoll开始读事件\n");
 				//根据读的结果,决定是否将任务添加到线程池,还是关闭连接
+				//添加进线程池任务队列的是对应连接对象的指针
 				if (user[sockfd].read())
 				{
 					// INFO("添加进任务队列\n");

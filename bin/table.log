@@ -1,0 +1,8 @@
++-------------+-------------+------+-----+---------+-------+
+| Field       | Type        | Null | Key | Default | Extra |
++-------------+-------------+------+-----+---------+-------+
+| invite_code | varchar(23) | NO   | PRI | NULL    |       |
+| user_id     | varchar(9)  | YES  |     | NULL    |       |
+| passwd      | varchar(20) | YES  |     | NULL    |       |
+| isUsed      | int         | NO   |     | NULL    |       |
++-------------+-------------+------+-----+---------+-------+

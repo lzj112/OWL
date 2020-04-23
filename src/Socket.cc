@@ -20,8 +20,10 @@ int SocketTCP()
     int newSocket = ::socket(AF_INET, SOCK_STREAM, 0);
     if (newSocket == -1)
     ERROR("created a new socket = %d", newSocket);
-    struct linger tmp = {1, 0};
-	setsockopt(newSocket, SOL_SOCKET, SO_LINGER, &tmp, sizeof(tmp));
+    // struct linger tmp = {1, 0};
+	// setsockopt(newSocket, SOL_SOCKET, SO_LINGER, &tmp, sizeof(tmp));
+    int flag = 1;
+    setsockopt(newSocket, SOL_SOCKET, SO_REUSEADDR, &flag, sizeof(flag));
     return newSocket;
 }
 
@@ -39,7 +41,7 @@ int Bind(int sockfd, int port)
                      reinterpret_cast<sockaddr *> (&ser),
                      sizeof(ser));
     if (ret == -1) 
-        ERROR("bind skcet failed");
+        perror("bind skcet failed");
 }
 
 

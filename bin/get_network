@@ -1,0 +1,46 @@
+#! /usr/bin/python3
+# -*- coding : utf-8 -*-
+'''
+获取服务器流量情况
+'''
+import os
+import sys
+import json
+import string
+import socket
+import urllib.parse
+
+sockfd = int(sys.argv[1])
+argv = sys.argv[2]
+argv = "?" + argv
+content = sys.argv[3]
+
+result = urllib.parse.urlsplit(argv)
+parameter = dict(urllib.parse.parse_qsl(urllib.parse.urlsplit(argv).query))
+ip = parameter['ip']
+date = parameter['date']
+
+
+fname = '/home/ubuntu/monit_log/%s/network_%s.log' % (ip, date)
+with open(fname, 'r', encoding='utf-8') as f:  # 打开文件
+    lines = f.readlines() 
+
+it = iter(lines)
+transport = []
+receive = []
+for line in it:
+    log = line.split()
+    transport.append(log[3])
+    receive.append(log[6])
+
+header = "HTTP/1.0 200 OK\r\nContent-type: application/json\r\nContent-Length: "
+
+json_body = {}
+json_body['transport'] = transport
+json_body['receive'] = receive
+body = json.dumps(json_body)
+
+response = '%s%s\r\n\r\n%s' % (header, len(body), body)
+s = socket.fromfd(sockfd, socket.AF_INET, socket.SOCK_STREAM)
+s.sendall(response.encode())
+s.close()

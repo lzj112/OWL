@@ -1,0 +1,72 @@
+#! /usr/bin/python3
+# -*- coding : utf-8 -*-
+'''
+登录
+type = 0 成功
+     = 1 id或密码错误
+'''
+import os
+import sys
+import time
+import json
+import random
+import string
+import socket
+import urllib.parse
+import pymysql as pydb
+
+sockfd = int(sys.argv[1])
+argv = sys.argv[2]
+argv = "?" + argv
+content = sys.argv[3]
+
+result = urllib.parse.urlsplit(argv)
+parameter = dict(urllib.parse.parse_qsl(urllib.parse.urlsplit(argv).query))
+
+
+def db_connect():
+    conn = pydb.connect(host = "localhost",
+                           port = 3306,
+                           user = "root", 
+                           passwd = "zijianlv",
+                           db = "OWL",
+                           charset = "utf8")
+    return conn
+
+def check_connect():
+    global db 
+    try:
+        db.ping()
+    except:
+        db = db_connect()
+
+def parse_argv(argv):
+    index = argv.find('&')
+
+
+db = db_connect()
+cursor = db.cursor()
+check_connect()
+
+
+header = "HTTP/1.0 200 OK\r\nContent-type: application/json\r\nContent-Length: "
+usr_id = parameter['id'] 
+passwd = parameter['passwd']
+
+s = socket.fromfd(sockfd, socket.AF_INET, socket.SOCK_STREAM)
+
+SQL = "SELECT user_id, passwd FROM user WHERE user_id = %s AND passwd = %s"
+effect_row = cursor.execute(SQL, (usr_id, passwd))
+    
+if effect_row:
+    body = "{ 'type' : 0 }"
+else :
+    body = "{ 'type' : 1 }"
+    
+len_body = len(body)
+response = "%s%s\r\n\r\n%s" % (header, len_body, body)
+s.sendall(response.encode())
+s.close()
+cursor.close()
+db.close()
+

@@ -1,0 +1,53 @@
+#! /usr/bin/python3
+# -*- coding : utf-8 -*-
+'''
+生成并返回唯一邀请码,然后将邀请码保存入表中
+'''
+import os
+import sys
+import time
+import random
+import string
+import socket
+import json
+import pymysql as pydb
+
+sockfd = int(sys.argv[1])
+argv = sys.argv[2]
+content = sys.argv[3]
+
+# 时间戳+进程id+随机字符串 (21位)
+pid = os.getpid()
+ticks = int(time.time())
+random_str = ''.join(random.sample(string.ascii_letters + string.digits, 6))
+invite_code = str(ticks) + str(pid) + random_str
+
+response = {}
+response['invite_code'] = invite_code
+response = json.dumps(response)
+len_body = len(response)
+header = "HTTP/1.1 200 OK\r\nContent-Type: application/json;charset=UTF-8\r\nContent-Length: %s\r\n\r\n" % (len_body,)
+response = "%s%s" % (header, response)
+
+s = socket.fromfd(sockfd, socket.AF_INET, socket.SOCK_STREAM)
+s.sendall(response.encode())
+s.close()
+
+# 存进表中
+db = pydb.connect(host = "localhost",
+                  port = 3306,
+                  user = "root", 
+                  passwd = "zijianlv",
+                  db = "OWL",
+                  charset = "utf8")
+cursor = db.cursor()
+SQL = "INSERT INTO user (invite_code, user_id, passwd, isUsed) VALUES (%s, %s, %s, %s)"
+try:
+    cursor.execute(SQL, (invite_code, '', '', 0))
+    db.commit()
+except:
+    db.rollback()
+finally:
+    cursor.close()
+    db.close()
+    

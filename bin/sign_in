@@ -1,0 +1,110 @@
+#! /usr/bin/python3
+# -*- coding : utf-8 -*-
+'''
+使用邀请码注册
+GET:
+1.passwd
+2.invite_code
+
+response:
+type = 0成功
+     = 1邀请码不存在或已被使用
+     = 2密码不符合要求
+     = -1 未知错误，请重试
+'''
+
+import os
+import sys
+import time
+import json
+import random
+import string
+import socket
+import urllib.parse
+import pymysql as pydb
+
+sockfd = int(sys.argv[1])
+argv = sys.argv[2]
+argv = "?" + argv
+content = sys.argv[3]
+
+result = urllib.parse.urlsplit(argv)
+parameter = dict(urllib.parse.parse_qsl(urllib.parse.urlsplit(argv).query))
+
+
+def db_connect():
+    conn = pydb.connect(host = "localhost",
+                           port = 3306,
+                           user = "root", 
+                           passwd = "zijianlv",
+                           db = "OWL",
+                           charset = "utf8")
+    return conn
+
+def check_connect():
+    global db 
+    try:
+        db.ping()
+    except:
+        db = db_connect()
+
+#创建唯一用户id
+def create_usrid():
+    id = str(random.choice([1, 2, 3, 4, 5, 6, 7, 8, 9])) + ''.join(random.sample(string.digits, 8))
+    return id
+
+db = db_connect()
+cursor = db.cursor()
+check_connect()
+
+header = "HTTP/1.0 200 OK\r\nContent-type: application/json\r\nContent-Length: "
+passwd = parameter['passwd']
+invite_code = parameter['invite_code']
+s = socket.fromfd(sockfd, socket.AF_INET, socket.SOCK_STREAM)
+
+SQL = "SELECT isUsed FROM user WHERE invite_code = %s"
+effect_row = cursor.execute(SQL, invite_code)
+is_used = cursor.fetchone()
+#邀请码不存在或已被使用
+if not effect_row or is_used:
+    body = "{ 'isSignin' : 'false', 'type' : 1, 'usr_id' : ''}"
+    len_body = len(body)
+    response = "%s%s\r\n\r\n%s" % (header, len_body, body)
+    s.sendall(response.encode())
+    s.close()
+    os._exit(0)
+
+# 密码长度不符合要求
+if len(passwd) < 6 or len(passwd) > 20:
+    body = "{ 'isSignin' : 'false', 'type' : 2, 'usr_id' : '' }"
+    len_body = len(body)
+    response = "%s%s\r\n\r\n%s" % (header, len_body, body)
+    s.sendall(response.encode())
+    s.close()
+    os._exit(0)
+
+usr_id =  create_usrid()
+SQL = "SELECT user_id FROM user WHERE user_id = %s"
+effect_row = cursor.execute(SQL, usr_id)
+while effect_row:
+    usr_id =  create_usrid()
+    effect_row = cursor.execute(SQL, usr_id)
+
+SQL = "INSERT INTO user (invite_code, user_id, passwd, isUsed) VALUES (%s, %s, %s, %s)"
+try:
+    effect_row = cursor.execute(SQL, (invite_code, usr_id, passwd, 1))
+    db.commit()
+    body = "{ 'isSignin' : 'true', 'type' : 0, 'usr_id' : '%s'}" % usr_id
+    len_body = len(body)
+    response = "%s%s\r\n\r\n%s" % (header, len_body, body)
+    s.sendall(response.encode())
+except:
+    db.rollback()
+    body = "{ 'isSignin' : 'false', 'type' : -1, 'usr_id' : ''}"
+    len_body = len(body)
+    response = "%s%s\r\n\r\n%s" % (header, len_body, json_content)
+    s.sendall(response.encode())
+finally:
+    cursor.close()
+    db.close()
+    s.close()

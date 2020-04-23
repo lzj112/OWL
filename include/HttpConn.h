@@ -14,6 +14,7 @@
 
 #include <sys/uio.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
 #include <sys/mman.h>
 #include <sys/epoll.h>
 #include <arpa/inet.h>
@@ -21,6 +22,7 @@
 #include <sys/socket.h>
 
 #include <vector>
+#include <string>
 #include <iostream>
 
 #include "Epoll.h"
@@ -150,8 +152,12 @@ private:
 	char m_real_file[MAXFILENAME_LEN];
 	//客户请求的目标文件的文件名
 	char m_url[256];
+	//URL后跟的参数，无时为None
+	char m_argv[256];
 	//HTTP的协议版本号, 我们仅支持HTTP/1.1
 	char m_version[16];
+	//请求体
+	char m_content[256];
 	//主机名
 	char* m_host;
 	//HTTP请求的消息体长度
